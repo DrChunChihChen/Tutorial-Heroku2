@@ -1,3 +1,4 @@
+import flask
 import dash
 import dash_html_components as html
 import dash_core_components as dcc
@@ -8,9 +9,11 @@ url = 'https://raw.githubusercontent.com/STATWORX/blog/f63d92d8f469578c54773b5da
 # Load data
 df = pd.read_csv(url, index_col=0, parse_dates=True, error_bad_lines=False)
 df.index = pd.to_datetime(df['Date'])
+server = flask.Flask(__name__)
+server.secret_key = os.environ.get('secret_key', str(randint(0, 1000000)))
+app = dash.Dash(__name__, server=server)
 
-# Initialize the app
-app = dash.Dash(__name__)
+
 app.config.suppress_callback_exceptions = True
 
 
@@ -87,4 +90,4 @@ def update_graph(selected_dropdown_value):
 
 
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.server.run(debug=True, threaded=True)
