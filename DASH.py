@@ -1,90 +1,115 @@
 import dash
 import dash_html_components as html
 import dash_core_components as dcc
+from dash.dependencies import Input, Output, State
+
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 import pandas as pd
-from dash.dependencies import Input, Output
-url = 'https://raw.githubusercontent.com/STATWORX/blog/f63d92d8f469578c54773b5dad2aaac9f6eb38a5/DashApp/data/stockdata2.csv'
-# Load data
-df = pd.read_csv(url, index_col=0, parse_dates=True, error_bad_lines=False)
-df.index = pd.to_datetime(df['Date'])
+from datetime import datetime
 
-# Initialize the app
-app = dash.Dash(__name__)
-app.config.suppress_callback_exceptions = True
+import requests
+import json
 
 
-def get_options(list_stocks):
-    dict_list = []
-    for i in list_stocks:
-        dict_list.append({'label': i, 'value': i})
+coin_info = json.loads(requests.get('https://api.coincap.io/v2/rates').content).get('data')
+curr_rate = 0
+for coin in coin_info:
+    if(coin.get('symbol')=='BTC'):
+        curr_rate = float(coin.get('rateUsd'))
+df_line = pd.DataFrame([[datetime.utcnow(),curr_rate ]],columns=['time', 'rate'])
+last_update_time = datetime.utcnow()
 
-    return dict_list
+app = dash.Dash()
+server = app.server
+app.layout = html.Div(children=[
+    html.H1(
+        children='BTC Live Conversion Rate',
+        style={
+            'textAlign': 'center'
+        }
+    ),
+
+    html.H3(
+        id='last_update_time',
+        style={
+            'textAlign': 'center'
+        }
+    ),
+
+    html.H1(
+        children="   ",
+        style={
+            'textAlign': 'center'
+        }
+    ),
+    html.Div(children=[
+        html.Div(children=[
+            html.H3(id='rate_text', children='Latest BTC-USD Rate', style={'textAlign': 'center'}),
+            html.H1(id='rate', style={'textAlign': 'center', 'bottomMargin': 50})],
+            style={"border": "2px black solid"}),
+        html.Div(children=[
+            dcc.Graph(id='plot')],
+            style={"border": "2px black solid"})],
+        style={'width': '100%', 'height': '90%', 'float': 'left', 'display': 'inline-block',
+               "border": "2px black solid"}),
+    dcc.Interval(
+        id='interval-component',
+        interval=5000,  # 5000 milliseconds = 5 seconds
+        n_intervals=0),
+    html.Div(id='intermediate-value', children=df_line.to_json(date_format='iso', orient='split'),
+             style={'display': 'none'})
+])
 
 
-app.layout = html.Div(
-    children=[
-        html.Div(className='row',
-                 children=[
-                    html.Div(className='four columns div-user-controls',
-                             children=[
-                                 html.H2('DASH - STOCK PRICES'),
-                                 html.P('Visualising time series with Plotly - Dash.'),
-                                 html.P('Pick one or more stocks from the dropdown below.'),
-                                 html.Div(
-                                     className='div-for-dropdown',
-                                     children=[
-                                         dcc.Dropdown(id='stockselector', options=get_options(df['stock'].unique()),
-                                                      multi=True, value=[df['stock'].sort_values()[0]],
-                                                      style={'backgroundColor': '#1E1E1E'},
-                                                      className='stockselector'
-                                                      ),
-                                     ],
-                                     style={'color': '#1E1E1E'})
-                                ]
-                             ),
-                    html.Div(className='eight columns div-for-charts bg-grey',
-                             children=[
-                                 dcc.Graph(id='timeseries', config={'displayModeBar': False}, animate=True)
-                             ])
-                              ])
-        ]
+@app.callback(Output('intermediate-value', 'children'), [Input('interval-component', 'n_intervals')],
+              [State('intermediate-value', 'children')])
+def clean_data(value, json_old):
+    df_old = pd.read_json(json_old, orient='split')
+    coin_info = json.loads(requests.get('https://api.coincap.io/v2/rates').content).get('data')
+    curr_rate = 0
+    for coin in coin_info:
+        if (coin.get('symbol') == 'BTC'):
+            curr_rate = float(coin.get('rateUsd'))
 
-)
+    df_curr = pd.DataFrame([[datetime.utcnow(), curr_rate]], columns=['time', 'rate'])
+    df_new = df_old.append(df_curr, ignore_index=True)
+    # return latest 100 entries
+    return df_new.tail(100).to_json(date_format='iso', orient='split')
 
 
-# Callback for timeseries price
-@app.callback(Output('timeseries', 'figure'),
-              [Input('stockselector', 'value')])
-def update_graph(selected_dropdown_value):
-    trace1 = []
-    df_sub = df
-    for stock in selected_dropdown_value:
-        trace1.append(go.Scatter(x=df_sub[df_sub['stock'] == stock].index,
-                                 y=df_sub[df_sub['stock'] == stock]['value'],
-                                 mode='lines',
-                                 opacity=0.7,
-                                 name=stock,
-                                 textposition='bottom center'))
-    traces = [trace1]
-    data = [val for sublist in traces for val in sublist]
-    figure = {'data': data,
-              'layout': go.Layout(
-                  colorway=["#5E0DAC", '#FF4F00', '#375CB1', '#FF7400', '#FFF400', '#FF0056'],
-                  template='plotly_dark',
-                  paper_bgcolor='rgba(0, 0, 0, 0)',
-                  plot_bgcolor='rgba(0, 0, 0, 0)',
-                  margin={'b': 15},
-                  hovermode='x',
-                  autosize=True,
-                  title={'text': 'Stock Prices', 'font': {'color': 'white'}, 'x': 0.5},
-                  xaxis={'range': [df_sub.index.min(), df_sub.index.max()]},
-              ),
+# Callback to update the last-update-time element
+@app.callback(Output('last_update_time', 'children'),
+              [Input('interval-component', 'n_intervals')])
+def update_time(n):
+    return 'Last update time (UTC): {}'.format(datetime.utcnow())
 
-              }
 
-    return figure
+# Callback to update the latest rate value
+@app.callback(Output('rate', 'children'),
+              [Input('intermediate-value', 'children')])
+def update_rate(jsonified_data):
+    df = pd.read_json(jsonified_data, orient='split')
+    curr_rate = df.tail(1)['rate'].max()
 
+    return curr_rate
+
+
+# Callback to update the line-graph
+@app.callback(Output('plot', 'figure'),
+              [Input('intermediate-value', 'children')])
+def update_realtime_fig(json1):
+    df_go = pd.read_json(json1, orient='split').tail(500)
+    fig = make_subplots()
+    fig.add_trace(go.Scatter(x=df_go['time'], y=df_go['rate'],
+                             mode='lines+markers',
+                             name='Devices'))
+    fig.update_layout(
+        title_text="Rate in last 100 readings", uirevision="Don't change"
+    )
+    fig.update_yaxes(title_text="Rate", secondary_y=False)
+    return fig
 
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run_server()
